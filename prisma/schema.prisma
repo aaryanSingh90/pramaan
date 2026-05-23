@@ -1,0 +1,197 @@
+// Pramaan — certificate issuance + verification schema
+// One Postgres database. Multi-tenant via Institution.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Tenancy ────────────────────────────────────────────────────────────────
+
+model Institution {
+  id          String   @id @default(cuid())
+  // Public-facing display name — appears on certificates and verification pages.
+  name        String
+  // Slug used for the institution's custom verification page namespace, e.g.
+  // pramaan.in/v/iitb/abc123 (Phase 2). For now we use the certificate's own id.
+  slug        String   @unique
+  // Primary contact / billing email.
+  email       String   @unique
+  // Optional uploaded logo URL — overlaid on certificates and shown on /v/<id>.
+  logoUrl     String?
+  // Subscription tier. Drives quotas + feature gating.
+  plan        Plan     @default(FREE)
+  // Issuer-level usage counters (rolling monthly window).
+  monthlyIssued       Int @default(0)
+  monthlyVerifications Int @default(0)
+  monthCounterResetAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users        User[]
+  templates    Template[]
+  certificates Certificate[]
+  apiKeys      ApiKey[]
+}
+
+enum Plan {
+  FREE                 // 5 verifications/day (public), no issuing
+  ISSUER_STARTER       // 100 certificates/month
+  ISSUER_PRO           // 1000 certificates/month + custom branding
+  VERIFIER_STARTER     // 200 verifications/month (HR teams)
+  VERIFIER_PRO         // 1000 verifications/month + bulk + API
+  ENTERPRISE           // unlimited, custom domain, white label
+}
+
+// ─── Users (staff of an institution) ────────────────────────────────────────
+
+model User {
+  id            String      @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  email         String      @unique
+  name          String
+  passwordHash  String
+  role          UserRole    @default(STAFF)
+  lastLoginAt   DateTime?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@index([institutionId])
+}
+
+enum UserRole {
+  OWNER     // billing + invite staff
+  STAFF     // issue + revoke certificates
+}
+
+// ─── Certificate templates ──────────────────────────────────────────────────
+// A template = a background image + a placement map of field placeholders.
+// When a certificate is issued, the platform composites recipient data into
+// the background using the template's field placements.
+
+model Template {
+  id            String   @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  name          String
+  // URL (S3/R2 or local in dev) of the background image — usually A4 landscape.
+  backgroundUrl String?
+  // JSON map of field placements. Schema:
+  //   [{ key: 'recipientName', x: 360, y: 220, fontSize: 32, font: 'serif',
+  //      color: '#1a1a1a', align: 'center', maxWidth: 600 }, ...]
+  // x/y are pixel coordinates relative to backgroundUrl's intrinsic size.
+  fields        Json     @default("[]")
+  // Page size in points (1 pt = 1/72 inch). Default A4 landscape.
+  pageWidth     Int      @default(842)
+  pageHeight    Int      @default(595)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  archivedAt    DateTime?
+
+  certificates  Certificate[]
+
+  @@index([institutionId])
+}
+
+// ─── Certificates ───────────────────────────────────────────────────────────
+// One row per certificate ever issued. The row IS the source of truth — the
+// PDF is just a rendering of this row that anyone can hold a copy of.
+
+model Certificate {
+  // Public-facing ID used in /v/<id> and QR codes. Short, URL-safe, 12 chars.
+  id              String   @id
+  institutionId   String
+  institution     Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  templateId      String?
+  template        Template? @relation(fields: [templateId], references: [id])
+
+  // Recipient + course core fields. Free-form so the UI doesn't constrain
+  // institutions that have unusual certificate types (sports medals, ID cards).
+  recipientName   String
+  recipientEmail  String?
+  course          String?
+  duration        String?
+  competitionName String?
+  grade           String?
+  // Any additional fields are stored here per template.
+  fields          Json     @default("{}")
+
+  issuedAt        DateTime @default(now())
+  validUntil      DateTime?
+
+  // Storage URL of the generated PDF. Re-rendered on demand if missing.
+  pdfUrl          String?
+  // HMAC-SHA256 of (id || institutionId || recipientName || course || issuedAt
+  // || CERT_SIGNING_SECRET). Stored at issue time; checked on every verify.
+  // If anyone edits the row in the DB after issue, the signature won't match
+  // and verifies will return TAMPERED.
+  signature       String
+
+  status          CertStatus @default(ACTIVE)
+  revokedAt       DateTime?
+  revokeReason    String?
+
+  verifications   Verification[]
+
+  @@index([institutionId])
+  @@index([recipientEmail])
+  @@index([issuedAt])
+}
+
+enum CertStatus {
+  ACTIVE
+  REVOKED
+}
+
+// ─── Verifications — every public lookup is logged ─────────────────────────
+// Drives the analytics dashboard for institutions ("how many people checked
+// this certificate?") and the free-tier rate-limiter for anonymous IPs.
+
+model Verification {
+  id             String   @id @default(cuid())
+  certificateId  String?
+  certificate    Certificate? @relation(fields: [certificateId], references: [id], onDelete: SetNull)
+  // Whatever the user pasted — keep even if not found so we can show repeated
+  // failed attempts in analytics.
+  queriedId      String
+  result         VerifyResult
+  verifierIp     String?
+  verifierEmail  String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  @@index([certificateId])
+  @@index([verifierIp, createdAt])
+  @@index([createdAt])
+}
+
+enum VerifyResult {
+  VALID
+  REVOKED
+  NOT_FOUND
+  TAMPERED
+  EXPIRED
+}
+
+// ─── API access for HR systems / large verifiers ───────────────────────────
+
+model ApiKey {
+  id            String   @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  name          String
+  // Hash of the actual key — we only ever store the SHA-256, never the plaintext.
+  keyHash       String   @unique
+  // First + last 4 chars of the key for UI display ("pra_xxxx...abcd").
+  keyPreview    String
+  lastUsedAt    DateTime?
+  createdAt     DateTime @default(now())
+  revokedAt     DateTime?
+
+  @@index([institutionId])
+}

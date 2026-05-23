@@ -1,0 +1,22 @@
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+.env
+.env.local
+.env.development.local
+.env.production.local
+
+.DS_Store
+*.log
+npm-debug.log*
+
+# Prisma — we commit migrations, never the generated client.
+prisma/migrations/dev.db*
+prisma/migrations/migration_lock.toml.bak
+
+# Storage / uploads (local dev only)
+storage/
