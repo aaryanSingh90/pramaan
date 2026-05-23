@@ -24,6 +24,13 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
 
+  // Decode base64 data URL → raw bytes (templates store the bg image inline).
+  let backgroundBytes: Uint8Array | undefined
+  if (cert.template?.backgroundUrl) {
+    const m = /^data:image\/(?:png|jpeg|jpg);base64,(.+)$/i.exec(cert.template.backgroundUrl)
+    if (m) backgroundBytes = Uint8Array.from(Buffer.from(m[1], 'base64'))
+  }
+
   const pdfBytes = await renderCertificatePdf({
     id:              cert.id,
     recipientName:   cert.recipientName,
@@ -37,6 +44,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     verifyUrl:       `${baseUrl}/v/${cert.id}`,
     pageWidth:       cert.template?.pageWidth,
     pageHeight:      cert.template?.pageHeight,
+    backgroundBytes,
     fields:          cert.template?.fields as never,
   })
 

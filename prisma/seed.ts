@@ -35,9 +35,11 @@ async function main() {
         create: {
           name: 'Course Completion (Default)',
           fields: [
-            { key: 'recipientName', x: 421, y: 250, fontSize: 36, font: 'serif', align: 'center' },
-            { key: 'course',        x: 421, y: 320, fontSize: 24, font: 'serif', align: 'center' },
-            { key: 'duration',      x: 421, y: 380, fontSize: 16, font: 'sans',  align: 'center' },
+            { key: 'header',           xNorm: 0.50, yNorm: 0.18, fontSize: 14, font: 'sans',  align: 'center' },
+            { key: 'recipientName',    xNorm: 0.50, yNorm: 0.33, fontSize: 42, font: 'serif', align: 'center', bold: true },
+            { key: 'subheader',        xNorm: 0.50, yNorm: 0.42, fontSize: 14, font: 'sans',  align: 'center' },
+            { key: 'course',           xNorm: 0.50, yNorm: 0.52, fontSize: 26, font: 'serif', align: 'center' },
+            { key: 'durationAndGrade', xNorm: 0.50, yNorm: 0.61, fontSize: 13, font: 'sans',  align: 'center' },
           ],
         },
       },

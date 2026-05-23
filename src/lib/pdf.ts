@@ -14,14 +14,22 @@
 import { PDFDocument, StandardFonts, rgb, type PDFPage } from 'pdf-lib'
 import QRCode from 'qrcode'
 
-interface FieldPlacement {
+export interface FieldPlacement {
+  /** What recipient property this field renders. */
   key:       string
-  x:         number     // points from left, 0 = left edge
-  y:         number     // points from BOTTOM (pdf-lib convention)
-  fontSize?: number     // default 14
+  /** Optional override label (used for `custom` fields). */
+  label?:    string
+  /** Static text — for fields that don't pull from recipient data. */
+  text?:     string
+  /** Normalized 0..1 position, TOP-LEFT origin (matches the editor canvas). */
+  xNorm:     number
+  yNorm:     number
+  /** Font size in points (1 pt = 1/72"). */
+  fontSize?: number
   font?:     'serif' | 'sans' | 'mono'
   align?:    'left' | 'center' | 'right'
-  maxWidth?: number     // truncate / wrap at this width
+  color?:    string    // hex like '#1a1a1a'
+  bold?:     boolean
 }
 
 export interface RenderInput {
@@ -93,44 +101,60 @@ export async function renderCertificatePdf(input: RenderInput): Promise<Uint8Arr
   }
 
   // 2) Field overlay. Use caller-provided fields if present, else a sensible
-  //    default layout.
-  const fields: FieldPlacement[] = input.fields ?? [
-    { key: 'header',          x: W / 2, y: H - 110, fontSize: 14, font: 'sans',  align: 'center' },
-    { key: 'recipientName',   x: W / 2, y: H - 200, fontSize: 42, font: 'serif', align: 'center' },
-    { key: 'subheader',       x: W / 2, y: H - 250, fontSize: 14, font: 'sans',  align: 'center' },
-    { key: 'course',          x: W / 2, y: H - 305, fontSize: 26, font: 'serif', align: 'center' },
-    { key: 'duration',        x: W / 2, y: H - 350, fontSize: 13, font: 'sans',  align: 'center' },
-  ]
+  //    default layout. Coordinates are normalized 0..1 with TOP-LEFT origin
+  //    (matches the visual editor) — we flip Y for pdf-lib's bottom-left convention.
+  //
+  //    Backward-compat: if a caller passes old-format fields (with `x`/`y`
+  //    pixel coords and no `xNorm`/`yNorm`), we fall back to defaults rather
+  //    than rendering nothing or NaN-positioned text.
+  const incoming = input.fields ?? []
+  const allValid = incoming.every(f =>
+    typeof f.xNorm === 'number' && typeof f.yNorm === 'number' &&
+    f.xNorm >= 0 && f.xNorm <= 1 && f.yNorm >= 0 && f.yNorm <= 1,
+  )
+  const fields: FieldPlacement[] = (incoming.length > 0 && allValid) ? incoming : DEFAULT_FIELDS
 
-  const valueFor = (key: string): string => {
-    switch (key) {
+  const valueFor = (f: FieldPlacement): string => {
+    if (f.text)        return f.text
+    switch (f.key) {
       case 'header':        return 'This is to certify that'
       case 'subheader':     return input.competitionName
         ? 'participated in'
         : 'has successfully completed the course on'
       case 'recipientName': return input.recipientName
       case 'course':        return input.course ?? input.competitionName ?? ''
-      case 'duration':      return [input.duration, input.grade]
+      case 'competition':   return input.competitionName ?? ''
+      case 'duration':      return input.duration ?? ''
+      case 'grade':         return input.grade ?? ''
+      case 'durationAndGrade': return [input.duration, input.grade]
         .filter(Boolean).map(s => String(s).toUpperCase()).join('  ·  ')
-      default:              return ''
+      case 'issuedDate':    return input.issuedAt.toLocaleDateString('en-IN', {
+        day: 'numeric', month: 'long', year: 'numeric',
+      })
+      case 'institution':   return input.institutionName
+      case 'certId':        return input.id.toUpperCase()
+      default:              return f.text ?? ''
     }
   }
 
   for (const f of fields) {
-    const value = valueFor(f.key).trim()
+    const value = valueFor(f).trim()
     if (!value) continue
     const fSize = f.fontSize ?? 14
-    const font  = fontFor(f.font, fSize >= 24)
+    const font  = fontFor(f.font, f.bold ?? fSize >= 24)
     const width = font.widthOfTextAtSize(value, fSize)
-    let drawX = f.x
-    if (f.align === 'center') drawX = f.x - width / 2
-    if (f.align === 'right')  drawX = f.x - width
+    // Normalized → PDF points, top-left origin → bottom-left origin
+    const xPt   = f.xNorm * W
+    const yPt   = H - (f.yNorm * H) - fSize  // anchor baseline at y, not top
+    let drawX = xPt
+    if (f.align === 'center') drawX = xPt - width / 2
+    if (f.align === 'right')  drawX = xPt - width
     page.drawText(value, {
       x: drawX,
-      y: f.y,
+      y: yPt,
       size: fSize,
       font,
-      color: rgb(0.07, 0.08, 0.15),
+      color: hexToRgb(f.color ?? '#0a0e1a'),
     })
   }
 
@@ -194,6 +218,24 @@ async function tryEmbedImage(pdf: PDFDocument, bytes: Uint8Array) {
   try { return await pdf.embedPng(bytes) } catch {}
   try { return await pdf.embedJpg(bytes) } catch {}
   return null
+}
+
+/** Default layout used when a template has no fields configured. Top-left
+ *  normalized. The numbers were tuned against the programmatic parchment. */
+const DEFAULT_FIELDS: FieldPlacement[] = [
+  { key: 'header',        xNorm: 0.50, yNorm: 0.18, fontSize: 14, font: 'sans',  align: 'center' },
+  { key: 'recipientName', xNorm: 0.50, yNorm: 0.33, fontSize: 42, font: 'serif', align: 'center', bold: true },
+  { key: 'subheader',     xNorm: 0.50, yNorm: 0.42, fontSize: 14, font: 'sans',  align: 'center' },
+  { key: 'course',        xNorm: 0.50, yNorm: 0.52, fontSize: 26, font: 'serif', align: 'center' },
+  { key: 'durationAndGrade', xNorm: 0.50, yNorm: 0.61, fontSize: 13, font: 'sans', align: 'center' },
+]
+
+/** Parse '#rrggbb' into pdf-lib's normalized RGB triple. */
+function hexToRgb(hex: string): ReturnType<typeof rgb> {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim())
+  if (!m) return rgb(0.07, 0.08, 0.15)
+  const n = parseInt(m[1], 16)
+  return rgb(((n >> 16) & 0xff) / 255, ((n >> 8) & 0xff) / 255, (n & 0xff) / 255)
 }
 
 /**
