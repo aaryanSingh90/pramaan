@@ -200,10 +200,15 @@ model Verification {
   verifierIp     String?
   verifierEmail  String?
   userAgent      String?
+  // If the verification came in via REST with a Bearer key, track which key
+  // — lets the institution see usage by app, and us enforce per-key limits.
+  apiKeyId       String?
+  apiKey         ApiKey? @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
   createdAt      DateTime @default(now())
 
   @@index([certificateId])
   @@index([verifierIp, createdAt])
+  @@index([apiKeyId, createdAt])
   @@index([createdAt])
 }
 
@@ -229,6 +234,8 @@ model ApiKey {
   lastUsedAt    DateTime?
   createdAt     DateTime @default(now())
   revokedAt     DateTime?
+
+  verifications Verification[]
 
   @@index([institutionId])
 }

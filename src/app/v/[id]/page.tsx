@@ -5,26 +5,10 @@ import {
   ShieldCheck, ShieldAlert, ShieldX, Clock, Building2, User, BookOpen,
   Calendar, ScanLine, AlertTriangle, ArrowRight,
 } from 'lucide-react'
-import { db } from '@/lib/db'
-import { verifySignature } from '@/lib/sign'
+import { verifyCertificate, type Verdict } from '@/lib/verify'
 
 interface PageProps {
   params: Promise<{ id: string }>
-}
-
-type Verdict =
-  | { kind: 'VALID';     cert: Awaited<ReturnType<typeof fetchCert>> }
-  | { kind: 'REVOKED';   cert: Awaited<ReturnType<typeof fetchCert>> }
-  | { kind: 'EXPIRED';   cert: Awaited<ReturnType<typeof fetchCert>> }
-  | { kind: 'TAMPERED';  cert: Awaited<ReturnType<typeof fetchCert>> }
-  | { kind: 'NOT_FOUND'; queriedId: string }
-  | { kind: 'THROTTLED'; queriedId: string }
-
-async function fetchCert(id: string) {
-  return db.certificate.findUnique({
-    where: { id },
-    include: { institution: { select: { name: true, logoUrl: true, slug: true } } },
-  })
 }
 
 async function getClientIp(): Promise<string | null> {
@@ -34,79 +18,13 @@ async function getClientIp(): Promise<string | null> {
   return h.get('x-real-ip')
 }
 
-/**
- * Free-tier rate limit: 5 lookups per IP per 24h, counted across the entire
- * Verification table. Returns true if the caller has tripped the limit.
- */
-async function isThrottled(ip: string | null): Promise<boolean> {
-  if (!ip) return false
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000)
-  const recent = await db.verification.count({
-    where: { verifierIp: ip, createdAt: { gte: since } },
-  })
-  return recent >= 5
-}
-
-async function judge(id: string): Promise<Verdict> {
-  const ip = await getClientIp()
-
-  if (await isThrottled(ip)) {
-    return { kind: 'THROTTLED', queriedId: id }
-  }
-
-  const cert = await fetchCert(id)
-
-  if (!cert) {
-    await db.verification.create({
-      data: { queriedId: id, result: 'NOT_FOUND', verifierIp: ip },
-    })
-    return { kind: 'NOT_FOUND', queriedId: id }
-  }
-
-  // Re-verify the HMAC every time. If anyone has edited the row directly in
-  // the database, this fails and we surface TAMPERED — the loudest possible
-  // verdict for an institution to investigate.
-  const sigOk = verifySignature(
-    {
-      id:              cert.id,
-      institutionId:   cert.institutionId,
-      recipientName:   cert.recipientName,
-      course:          cert.course,
-      competitionName: cert.competitionName,
-      issuedAt:        cert.issuedAt,
-    },
-    cert.signature,
-  )
-  if (!sigOk) {
-    await db.verification.create({
-      data: { queriedId: id, certificateId: cert.id, result: 'TAMPERED', verifierIp: ip },
-    })
-    return { kind: 'TAMPERED', cert }
-  }
-
-  if (cert.status === 'REVOKED') {
-    await db.verification.create({
-      data: { queriedId: id, certificateId: cert.id, result: 'REVOKED', verifierIp: ip },
-    })
-    return { kind: 'REVOKED', cert }
-  }
-
-  if (cert.validUntil && cert.validUntil < new Date()) {
-    await db.verification.create({
-      data: { queriedId: id, certificateId: cert.id, result: 'EXPIRED', verifierIp: ip },
-    })
-    return { kind: 'EXPIRED', cert }
-  }
-
-  await db.verification.create({
-    data: { queriedId: id, certificateId: cert.id, result: 'VALID', verifierIp: ip },
-  })
-  return { kind: 'VALID', cert }
-}
-
 export default async function VerifyPage({ params }: PageProps) {
   const { id } = await params
-  const verdict = await judge(id)
+  const h = await headers()
+  const verdict = await verifyCertificate(id, {
+    verifierIp: await getClientIp(),
+    userAgent:  h.get('user-agent'),
+  })
   return <Verdict verdict={verdict} queriedId={id} />
 }
 

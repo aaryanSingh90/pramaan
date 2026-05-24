@@ -2,13 +2,20 @@ import { Building2, CreditCard, Users as UsersIcon, Key } from 'lucide-react'
 import { getSession } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { format } from 'date-fns'
+import { ApiKeysPanel } from './ApiKeysPanel'
 
 export default async function SettingsPage() {
   const session = (await getSession())!
-  const institution = await db.institution.findUnique({
-    where: { id: session.institutionId },
-    include: { _count: { select: { users: true, certificates: true, apiKeys: true } } },
-  })
+  const [institution, apiKeys] = await Promise.all([
+    db.institution.findUnique({
+      where: { id: session.institutionId },
+      include: { _count: { select: { users: true, certificates: true } } },
+    }),
+    db.apiKey.findMany({
+      where: { institutionId: session.institutionId, revokedAt: null },
+      orderBy: { createdAt: 'desc' },
+    }),
+  ])
   if (!institution) return null
 
   const planLabel: Record<string, { label: string; tone: 'brand' | 'ink' }> = {
@@ -58,12 +65,7 @@ export default async function SettingsPage() {
         </Card>
 
         {/* API */}
-        <Card icon={Key} title="API access">
-          <Row label="API keys" value={`${institution._count.apiKeys}`} />
-          <p className="px-5 py-3 text-xs text-ink-dim border-t border-border">
-            Generate keys for HRMS integrations. Available on Issuer Pro and above.
-          </p>
-        </Card>
+        <ApiKeysPanel apiKeys={apiKeys} />
       </div>
     </div>
   )

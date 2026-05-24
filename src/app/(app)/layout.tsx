@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import {
   ShieldCheck, LayoutDashboard, FileText, Award, Settings as SettingsIcon, LogOut,
+  ScanLine,
 } from 'lucide-react'
 import { getSession } from '@/lib/auth'
 import { logoutAction } from '../(auth)/actions'
@@ -32,6 +33,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <NavItem href="/dashboard"     icon={LayoutDashboard} label="Dashboard" />
           <NavItem href="/templates"     icon={FileText}        label="Templates" />
           <NavItem href="/certificates"  icon={Award}           label="Certificates" />
+          <NavItem href="/verify"        icon={ScanLine}        label="Bulk verify" />
           <NavItem href="/settings"      icon={SettingsIcon}    label="Settings" />
         </nav>
 
