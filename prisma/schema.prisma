@@ -137,10 +137,47 @@ model Certificate {
   revokeReason    String?
 
   verifications   Verification[]
+  emailLogs       EmailLog[]
 
   @@index([institutionId])
   @@index([recipientEmail])
   @@index([issuedAt])
+}
+
+// ─── Email delivery audit ───────────────────────────────────────────────────
+// Every send attempt (auto + manual resend) lands here. Surfaced in the
+// certificate detail page so the institution can see exactly what hit the
+// recipient's inbox, and retry from the UI when a send fails.
+
+model EmailLog {
+  id            String   @id @default(cuid())
+  certificateId String
+  certificate   Certificate @relation(fields: [certificateId], references: [id], onDelete: Cascade)
+  toEmail       String
+  subject       String
+  status        EmailStatus
+  // Provider's message id (Resend etc.) or null if we never reached the API.
+  providerId    String?
+  // Error message if the send failed.
+  errorMessage  String?
+  // Was this an automatic send (after issue) or a manual resend from the UI?
+  trigger       EmailTrigger @default(AUTO)
+  createdAt     DateTime @default(now())
+
+  @@index([certificateId])
+  @@index([toEmail])
+  @@index([createdAt])
+}
+
+enum EmailStatus {
+  SENT
+  FAILED
+  SKIPPED          // no recipient email on file
+}
+
+enum EmailTrigger {
+  AUTO             // sent automatically after issue
+  MANUAL_RESEND    // user clicked Resend in the UI
 }
 
 enum CertStatus {

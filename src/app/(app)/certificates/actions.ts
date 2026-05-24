@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { db } from '@/lib/db'
 import { requireSession, AuthError } from '@/lib/auth'
 import { newCertificateId, signCertificate } from '@/lib/sign'
+import { sendCertificateEmail } from '@/lib/email'
 
 const singleSchema = z.object({
   templateId:      z.string().optional(),
@@ -23,6 +24,13 @@ export interface IssueState {
   fieldErrors?:  Record<string, string>
   createdId?:    string
   createdCount?: number
+  emailsSent?:   number
+}
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
 }
 
 export async function issueSingleAction(_prev: IssueState | null, formData: FormData): Promise<IssueState> {
@@ -73,6 +81,21 @@ export async function issueSingleAction(_prev: IssueState | null, formData: Form
       },
     })
 
+    // Fire-and-await — single issues are interactive, the user is staring
+    // at a spinner. If the send takes 2-3 sec it's fine. If it fails the
+    // certificate still exists; they can hit Resend from the detail page.
+    // We swallow the error so a flaky email provider never blocks issuance.
+    if (d.recipientEmail) {
+      try {
+        await sendCertificateEmail({ certificateId: id, trigger: 'AUTO' })
+      } catch (mailErr) {
+        // eslint-disable-next-line no-console
+        console.error('[issueSingle:email]', mailErr)
+        // Continue — the certificate is created and the failure is logged
+        // to EmailLog. User can resend from the detail page.
+      }
+    }
+
     revalidatePath('/dashboard')
     revalidatePath('/certificates')
     return { createdId: id, createdCount: 1 }
@@ -108,8 +131,9 @@ export async function issueBulkAction(_prev: IssueState | null, formData: FormDa
     if (lines.length > 500) return { error: 'Max 500 rows per batch. Split it up.' }
 
     const issuedAt = new Date()
+    // Row format (tab or comma separated): Name [, Course [, Duration [, Email]]]
     const creates = lines.map(line => {
-      const [name, course, duration] = line.split(/\t|,/).map(s => s.trim())
+      const [name, course, duration, email] = line.split(/\t|,/).map(s => s.trim())
       if (!name) return null
       const id = newCertificateId()
       const signature = signCertificate({
@@ -122,11 +146,12 @@ export async function issueBulkAction(_prev: IssueState | null, formData: FormDa
       })
       return {
         id,
-        institutionId: session.institutionId,
-        templateId:    parsed.data.templateId || null,
-        recipientName: name,
-        course:        course || null,
-        duration:      duration || null,
+        institutionId:  session.institutionId,
+        templateId:     parsed.data.templateId || null,
+        recipientName:  name,
+        recipientEmail: email && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? email.toLowerCase() : null,
+        course:         course || null,
+        duration:       duration || null,
         issuedAt,
         signature,
       }
@@ -135,14 +160,40 @@ export async function issueBulkAction(_prev: IssueState | null, formData: FormDa
     if (creates.length === 0) return { error: 'No valid rows. Each row needs a recipient name.' }
 
     await db.certificate.createMany({ data: creates })
+
+    // Send emails in parallel to whichever rows have a valid email. Resend
+    // rate-limits at 10/sec on the free tier; we chunk to stay polite.
+    const recipients = creates.filter(c => c.recipientEmail)
+    if (recipients.length > 0) {
+      const chunks = chunk(recipients, 5)
+      for (const group of chunks) {
+        await Promise.allSettled(
+          group.map(c => sendCertificateEmail({ certificateId: c.id, trigger: 'AUTO' })),
+        )
+      }
+    }
+
     revalidatePath('/dashboard')
     revalidatePath('/certificates')
-    return { createdCount: creates.length }
+    return { createdCount: creates.length, emailsSent: recipients.length }
   } catch (err) {
     if (err instanceof AuthError) redirect('/login')
     console.error('[issueBulk]', err)
     return { error: 'Could not create certificates. Try again.' }
   }
+}
+
+// ─── Manual resend from the cert detail page ───────────────────────────────
+
+export async function resendEmailAction(formData: FormData): Promise<void> {
+  const session = await requireSession()
+  const id = String(formData.get('id') ?? '')
+  if (!id) return
+  // Ownership check.
+  const owned = await db.certificate.findUnique({ where: { id }, select: { institutionId: true } })
+  if (!owned || owned.institutionId !== session.institutionId) return
+  await sendCertificateEmail({ certificateId: id, trigger: 'MANUAL_RESEND' })
+  revalidatePath(`/certificates/${id}`)
 }
 
 // ─── Revoke ─────────────────────────────────────────────────────────────────

@@ -5,26 +5,31 @@
 
 Pramaan lets institutions issue cryptographically-signed certificates with embedded QR codes. Anyone — HR teams, candidates, recruiters — can verify a certificate in one scan, with no app to install.
 
-## What's in the box (v0.1)
+## What's in the box (v0.4)
 
 - 🏫 **Issuer signup** — create an institution + first owner user
 - 🔐 **Auth** — JWT cookies, bcrypt password hashing, server actions
 - 📊 **Issuer dashboard** — KPIs, recent certificates, empty state CTA
+- 📝 **Issue flow** — single recipient form + paste-many bulk (up to 500 rows)
+- 📜 **Certificates list & detail** — search, filter Active/Revoked, download PDF, revoke
+- 🎨 **Template editor** — upload your own PNG/JPEG background, drag fields onto it, style each (font, size, color, alignment, bold)
+- 📄 **PDF generation** — `pdf-lib`-built, QR code embedded, cert ID in monospace under QR
+- ✉ **Email delivery** — auto-sends issued certificate (PDF + verify URL) to the recipient via Resend. Falls back to console-logging when no API key is set. Per-cert send log + Resend button.
 - 🔍 **Public verification** — `/v/<id>` server-rendered page with 6 verdicts:
   - ✓ Valid · ⓧ Revoked · ⏲ Expired · ⚠ Tampered · ✗ Not found · ⏸ Throttled
 - 🛡 **HMAC signatures** — tampered DB rows are detected on every verify
 - 🚦 **Rate limit** — 5 free verifications / IP / 24 h for anonymous users
 - 🎨 **Polished landing page** with pricing + verify-now bar
+- 🛟 **Custom error.tsx + not-found.tsx** — friendly fallbacks, never expose stack traces
+- 🔒 **Security headers** — HSTS, X-Frame-Options, no `X-Powered-By`, Permissions-Policy locked down
 
 ## What's coming next
 
-- Template editor (drag-drop fields onto a background image)
-- CSV upload → bulk PDF generation with QR codes
-- ZIP download of all issued certificates
-- Revoke flow from the dashboard
 - Razorpay subscription gating per plan
 - HR-side bulk verification (CSV in → CSV out)
 - API keys for HRMS integration
+- S3 / R2 storage for template backgrounds (base64-in-DB works up to ~500 templates)
+- ZIP download of all issued certificates
 
 ## Stack
 
@@ -48,8 +53,9 @@ npm install
 createdb pramaan
 
 # 3. Configure
-cp .env.example .env.local
+cp .env.example .env
 # (defaults work if you're on macOS with Homebrew Postgres + your shell user)
+# RESEND_API_KEY can stay blank — emails will be console-logged in that mode.
 
 # 4. Run migrations + seed demo data
 npx prisma migrate dev --name init

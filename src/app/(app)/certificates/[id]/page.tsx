@@ -1,13 +1,14 @@
 import Link from 'next/link'
 import { redirect, notFound } from 'next/navigation'
-import { format } from 'date-fns'
+import { format, formatDistanceToNow } from 'date-fns'
 import {
   ArrowLeft, Download, ExternalLink, RotateCcw, ShieldCheck, ShieldX,
-  User, Mail, BookOpen, Clock, Calendar, Building2, FileText,
+  User, Mail, BookOpen, Clock, Calendar, Building2, FileText, Send,
+  CheckCircle, AlertCircle, MinusCircle,
 } from 'lucide-react'
 import { getSession } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { revokeAction } from '../actions'
+import { revokeAction, resendEmailAction } from '../actions'
 
 interface PageProps { params: Promise<{ id: string }> }
 
@@ -16,7 +17,10 @@ export default async function CertificateDetail({ params }: PageProps) {
   const session = (await getSession())!
   const cert = await db.certificate.findUnique({
     where: { id },
-    include: { template: { select: { id: true, name: true } } },
+    include: {
+      template: { select: { id: true, name: true } },
+      emailLogs: { orderBy: { createdAt: 'desc' }, take: 5 },
+    },
   })
   if (!cert) notFound()
   // Ownership guard — managers from one institution can't open another's certificates.
@@ -120,8 +124,111 @@ export default async function CertificateDetail({ params }: PageProps) {
             </div>
           </footer>
         </section>
+
+        {/* Email delivery */}
+        <EmailPanel
+          certId={cert.id}
+          recipientEmail={cert.recipientEmail}
+          logs={cert.emailLogs}
+        />
       </div>
     </div>
+  )
+}
+
+function EmailPanel({
+  certId, recipientEmail, logs,
+}: {
+  certId: string
+  recipientEmail: string | null
+  logs: Array<{
+    id: string
+    toEmail: string
+    subject: string
+    status: 'SENT' | 'FAILED' | 'SKIPPED'
+    providerId: string | null
+    errorMessage: string | null
+    trigger: 'AUTO' | 'MANUAL_RESEND'
+    createdAt: Date
+  }>
+}) {
+  const lastSent = logs.find(l => l.status === 'SENT')
+
+  return (
+    <section className="bg-bg-card border border-border rounded-2xl overflow-hidden">
+      <header className="px-5 py-3 border-b border-border flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Mail className="w-4 h-4 text-brand shrink-0" />
+          <h2 className="font-bold truncate">Email delivery</h2>
+        </div>
+        {recipientEmail && (
+          <form action={resendEmailAction} className="inline-block shrink-0">
+            <input type="hidden" name="id" value={certId} />
+            <button
+              type="submit"
+              className="inline-flex items-center gap-1.5 text-xs font-bold border border-border-soft hover:border-brand/50 hover:text-brand px-3 py-1.5 rounded-md transition-colors focus-ring"
+            >
+              <Send className="w-3 h-3" />
+              {lastSent ? 'Resend' : 'Send'}
+            </button>
+          </form>
+        )}
+      </header>
+
+      {!recipientEmail ? (
+        <div className="px-5 py-6 text-center">
+          <MinusCircle className="w-6 h-6 text-ink-dim mx-auto mb-2" />
+          <p className="text-sm text-ink-mute">No recipient email on file — nothing to deliver.</p>
+          <p className="text-[11px] text-ink-dim mt-1">Add an email when issuing the certificate to automate delivery.</p>
+        </div>
+      ) : logs.length === 0 ? (
+        <div className="px-5 py-6 text-center">
+          <Send className="w-6 h-6 text-ink-dim mx-auto mb-2" />
+          <p className="text-sm text-ink-mute">No emails sent yet for this certificate.</p>
+          <p className="text-[11px] text-ink-dim mt-1">Click <strong>Send</strong> above to dispatch the PDF + verify URL to <strong className="text-ink">{recipientEmail}</strong>.</p>
+        </div>
+      ) : (
+        <ul className="divide-y divide-border">
+          {logs.map(log => {
+            const icon =
+              log.status === 'SENT'   ? <CheckCircle className="w-4 h-4 text-success" /> :
+              log.status === 'FAILED' ? <AlertCircle className="w-4 h-4 text-danger" /> :
+                                        <MinusCircle className="w-4 h-4 text-ink-dim" />
+            const statusColor =
+              log.status === 'SENT'   ? 'text-success' :
+              log.status === 'FAILED' ? 'text-danger'  :
+                                        'text-ink-mute'
+            return (
+              <li key={log.id} className="px-5 py-3 flex items-start gap-3">
+                <div className="mt-0.5 shrink-0">{icon}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`text-[10px] font-black uppercase tracking-wider ${statusColor}`}>{log.status}</span>
+                    <span className="text-[10px] text-ink-dim uppercase tracking-wider">
+                      · {log.trigger === 'AUTO' ? 'Auto' : 'Manual resend'}
+                    </span>
+                    <span className="text-[10px] text-ink-dim ml-auto">
+                      {formatDistanceToNow(log.createdAt, { addSuffix: true })}
+                    </span>
+                  </div>
+                  <p className="text-sm text-ink mt-0.5 truncate">{log.subject}</p>
+                  <p className="text-[11px] text-ink-mute mt-0.5">
+                    to <span className="font-mono">{log.toEmail || '—'}</span>
+                  </p>
+                  {log.errorMessage && (
+                    <p className="text-[11px] text-danger mt-1">{log.errorMessage}</p>
+                  )}
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+
+      <footer className="px-5 py-2.5 border-t border-border bg-bg-soft/30 text-[10px] text-ink-dim uppercase tracking-wider font-bold">
+        Showing last {logs.length === 0 ? 0 : logs.length} attempt{logs.length === 1 ? '' : 's'}
+      </footer>
+    </section>
   )
 }
 

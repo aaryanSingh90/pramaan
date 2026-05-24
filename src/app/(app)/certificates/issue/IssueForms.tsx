@@ -81,6 +81,7 @@ function BulkForm({ templates }: { templates: Template[] }) {
     return (
       <BulkSuccess
         count={state.createdCount}
+        emailsSent={state.emailsSent ?? 0}
         onAnother={() => { setResetKey(k => k + 1); window.history.replaceState(null, '', window.location.pathname) }}
       />
     )
@@ -101,11 +102,12 @@ function BulkForm({ templates }: { templates: Template[] }) {
           name="rows"
           rows={10}
           required
-          placeholder={`Priya Sharma\tAdvanced Mathematics\t12 weeks\nArjun Singh\tData Structures\t8 weeks\nAnjali Patel\tMachine Learning\t16 weeks`}
+          placeholder={`Priya Sharma\tAdvanced Mathematics\t12 weeks\tpriya@dit.edu.in\nArjun Singh\tData Structures\t8 weeks\narjun@dit.edu.in\nAnjali Patel\tMachine Learning\t16 weeks`}
           className="mt-1.5 w-full px-3.5 py-2.5 bg-bg border border-border rounded-lg text-ink placeholder-ink-dim focus-ring transition-colors focus:border-brand/60 font-mono text-sm resize-y"
         />
         <span className="text-[10px] text-ink-dim mt-1.5 block">
-          One per line. Tab or comma separates columns. Name is required, others optional.
+          One per line. Tab or comma separates columns: <strong>Name · Course · Duration · Email</strong>.
+          Name is required. Email is optional — if present, the certificate is mailed automatically.
         </span>
       </label>
 
@@ -164,14 +166,18 @@ function Success({ id, onAnother }: { id: string; onAnother: () => void }) {
   )
 }
 
-function BulkSuccess({ count, onAnother }: { count: number; onAnother: () => void }) {
+function BulkSuccess({ count, emailsSent, onAnother }: { count: number; emailsSent: number; onAnother: () => void }) {
   return (
     <div className="rounded-xl bg-success/5 border border-success/40 p-5 text-center">
       <div className="w-12 h-12 mx-auto rounded-full bg-success/15 flex items-center justify-center mb-3">
         <CheckCircle className="w-6 h-6 text-success" />
       </div>
       <h3 className="font-bold text-lg">{count} certificate{count !== 1 ? 's' : ''} issued</h3>
-      <p className="text-xs text-ink-mute mt-1">Find them in the Certificates list to download.</p>
+      <p className="text-xs text-ink-mute mt-1">
+        {emailsSent > 0
+          ? <>Emails sent to <strong className="text-ink">{emailsSent}</strong> recipient{emailsSent !== 1 ? 's' : ''}. Rest are in the Certificates list to download manually.</>
+          : 'Find them in the Certificates list to download.'}
+      </p>
       <div className="mt-5 flex justify-center gap-2 flex-wrap">
         <Link
           href="/certificates"
